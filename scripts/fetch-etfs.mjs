@@ -11,7 +11,7 @@ const list=readFileSync(listPath,'utf8').split(/\r?\n/).map(l=>l.replace(/#.*/,'
   const [t,cat]=l.split(',').map(x=>x.trim()); const key=t.toLowerCase();
   return {key:key.includes('.')? key : key+'.us', cat:cat||'Other'};
 });
-const sig='v3:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
+const sig='v4:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
 let prev=null; try{ if(prevPath && existsSync(prevPath)) prev=JSON.parse(readFileSync(prevPath,'utf8')); }catch(e){}
 if(prev && prev.sig===sig && Date.now()-Date.parse(prev.updated)<MAX_AGE_H*3600e3){
   writeFileSync(outPath, JSON.stringify(prev)); console.log('ETF data is fresh (', prev.updated, ') — reused'); process.exit(0);
@@ -26,8 +26,9 @@ async function history(key){
   const close=res.indicators.quote[0].close;
   let rows=[]; ts.forEach((t,i)=>{ if(close[i]!=null && close[i]>0) rows.push({t, d:iso(new Date(t*1000+off)), p:close[i]}); });
   if(rows.length<30) throw new Error('too little history');
-  // some London lines flip between pence and pounds in the source: undo x100 jumps
-  let k=1; for(let i=1;i<rows.length;i++){ const ratio=rows[i].p*k/rows[i-1].p; if(ratio>50) k/=100; else if(ratio<0.02) k*=100; rows[i].p*=k; }
+  // The source has stretches quoted in the wrong unit (pence vs pounds, or another currency's price). These funds
+  // never genuinely move 20% in a day, so treat any such jump as a unit change and carry the level across it.
+  let k=1; for(let i=1;i<rows.length;i++){ const raw=rows[i].p, ratio=raw*k/rows[i-1].p; if(ratio>1.25 || ratio<0.8) k=rows[i-1].p/raw; rows[i].p=raw*k; rows[i].k=k; }
   // Total return with dividends reinvested on the ex-dividend day. Worked out here from the raw prices and
   // dividend records, because the source's own adjusted series under-counts dividends on pence-quoted funds.
   const divs=Object.values((res.events||{}).dividends||{}).sort((x,y)=>x.date-y.date); let di=0;
@@ -35,7 +36,7 @@ async function history(key){
   while(di<divs.length && divs[di].date<=rows[0].t) di++;
   for(let i=1;i<rows.length;i++){
     let paid=0;
-    while(di<divs.length && divs[di].date<=rows[i].t+86399){ let a=divs[di].amount||0; if(a/rows[i].p>0.2) a/=100; paid+=a; di++; }
+    while(di<divs.length && divs[di].date<=rows[i].t+86399){ let a=(divs[di].amount||0)*(rows[i].k||1); if(a/rows[i].p>0.2) a/=100; paid+=a; di++; }
     rows[i].c=rows[i-1].c*(rows[i].p+paid)/rows[i-1].p;
   }
   return {rows, name:m.longName||m.shortName||'', cur:(m.currency==='GBp'||m.currency==='GBX')?'GBP':(m.currency||'')};
