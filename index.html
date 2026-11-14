@@ -208,6 +208,7 @@
   const CUR_SYM={USD:'$',GBP:'£',EUR:'€'};
   const curSym=w=>CUR_SYM[(w&&w.cur)||'USD']||'';
 
+  let goodProxy=0;
   async function pxFetch(url){
     const proxies=[
       u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),
@@ -217,7 +218,9 @@
       u=>u
     ];
     let err;
-    for(const mk of proxies){
+    const order=proxies.map((_,i)=>i); order.unshift(order.splice(goodProxy,1)[0]);   // last working route first
+    for(const pi of order){
+      const mk=proxies[pi];
       try{
         const ctrl=new AbortController();
         const to=setTimeout(()=>ctrl.abort(), 9000);
@@ -226,7 +229,7 @@
         if(!r.ok) throw new Error('HTTP '+r.status);
         const t=await r.text();
         // valid CSV starts with Symbol/Date; reject HTML error pages
-        if(t && t.trim().length && !/^\s*</.test(t.trim())) return t;
+        if(t && t.trim().length && !/^\s*</.test(t.trim())){ goodProxy=pi; return t; }
         throw new Error('bad payload');
       }catch(e){ err=e; }
     }
@@ -256,9 +259,13 @@
     return rows;
   }
 
-  async function refreshAll(){
+  let refreshing=false, lastRefresh=0;
+  async function refreshAll(opts){
+    const quiet=!!(opts&&opts.quiet);
+    if(refreshing) return;
     if(!watch.length){ render(); return; }
-    setLoading(true); showBanner('', '');
+    refreshing=true; lastRefresh=Date.now();
+    setLoading(true); if(!quiet) showBanner('', '');
     const stq=watch.map(stooqOf);
     let light={};
     try{
@@ -270,10 +277,15 @@
     let okCount=0, asof='';
     await Promise.all(watch.map(async (w)=>{
       const sym=w.sym, key=stooqOf(w), sc=w.scale||1;
-      const q={ sym, name:'', price:null, prev:null, chg:null, pct:null, spark:[], asof:'' };
+      const old=quotes[sym]||{};
+      const q={ sym, name:old.name||'', price:null, prev:null, chg:null, pct:null, spark:[], asof:'' };
+      // daily history only changes once a day: reuse today's copy instead of downloading it on every refresh
+      let rows=(old.hist && old.hist.day===todayISO && old.hist.key===key)? old.hist.rows : null;
       try{
-        const hurl='https://stooq.com/q/d/l/?s='+key+'&i=d';
-        const rows=parseHist(await pxFetch(hurl));
+        if(!rows){
+          rows=parseHist(await pxFetch('https://stooq.com/q/d/l/?s='+key+'&i=d')).slice(-33);
+          if(rows.length) q.hist={day:todayISO, key, rows};
+        } else q.hist=old.hist;
         if(rows.length){
           q.spark=rows.slice(-32).map(r=>r.close);
           const before=rows.filter(r=>r.d<todayISO);
@@ -295,8 +307,10 @@
       quotes[sym]=q;
     }));
 
-    setLoading(false);
+    setLoading(false); refreshing=false;
+    for(const k of Object.keys(quotes)) if(!watch.some(w=>w.sym===k)) delete quotes[k];   // drop removed tickers from the cache
     if(okCount===0){
+      if(quiet){ document.getElementById('status').textContent='Update failed · retrying'; render(); return; }
       showBanner('err','Couldn\'t load prices right now. The free data source may be busy or blocked — tap Refresh to try again. (A free API key would make this reliable — just ask.)');
     } else {
       document.getElementById('status').innerHTML = 'Updated '+timeNow()+ (asof?('<br>data as of '+asof):'');
@@ -509,7 +523,15 @@
     document.getElementById('sortSel').value=settings.sort;
     document.getElementById('holdBtn').classList.toggle('on',settings.holdings);
     render();
-    refreshAll();   // try one fetch on open; user can re-tap Refresh anytime
+    refreshAll();
+    const AUTO_MS=120000;
+    const auto=()=>{
+      if(document.hidden || Date.now()-lastRefresh<AUTO_MS) return;
+      const a=document.activeElement; if(a && a.tagName==='INPUT') return;   // don't redraw while you're typing
+      refreshAll({quiet:true});
+    };
+    setInterval(auto, 30000);
+    document.addEventListener('visibilitychange', auto);
   })();
 </script>
 </body>
