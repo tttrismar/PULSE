@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - tickers.txt
+      - etfs.txt
       - scripts/**
       - .github/workflows/prices.yml
 
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   prices:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,14 +31,20 @@ jobs:
         run: |
           curl -fsS "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/prices.json" -o previous.json || true
           node scripts/fetch-prices.mjs tickers.txt prices.json previous.json
+      - name: Fetch ETF performance (refreshed about once a day)
+        continue-on-error: true
+        run: |
+          curl -fsS "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/etfs.json" -o previous-etfs.json || true
+          node scripts/fetch-etfs.mjs etfs.txt etfs.json previous-etfs.json
       - name: Publish to the data branch
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir out && cp prices.json out/ && cd out
+          if [ -f ../etfs.json ]; then cp ../etfs.json .; fi
           git init -q -b data
           git config user.name "pulse-prices"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add prices.json
+          git add .
           git commit -q -m "Update prices"
           git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
