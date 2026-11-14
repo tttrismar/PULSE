@@ -1,0 +1,10 @@
+# Tickers the price job keeps up to date, one per line.
+# US shares: the plain ticker (AAPL). London shares: add .UK (SMT.UK).
+NVDA
+TSLA
+MSFT
+GOOGL
+AMZN
+META
+AAPL
+SMT.UK

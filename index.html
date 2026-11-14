@@ -161,7 +161,7 @@
 
   <footer>
     Freetrade imports are read in your browser only — the file is never uploaded anywhere.<br>
-    Prices via a free public source (Stooq) and are <b>delayed</b>, for personal reference only — not investment advice.<br>
+    Prices come from public sources (Yahoo Finance, Stooq), refresh about every 15 minutes and are <b>delayed</b>, for personal reference only — not investment advice.<br>
     Pulse is a tracker, not a broker. Always verify before making any decision.
   </footer>
 
@@ -201,62 +201,55 @@
   const saveSet  =()=>store.set(SKEY, JSON.stringify(settings));
   const saveCache=()=>store.set(CKEY, JSON.stringify(quotes));
 
-  /* ---------- data fetching (no API key) ---------- */
+  /* ---------- prices ----------
+     A scheduled job in the repository writes prices.json to the `data` branch about every 15 minutes
+     (see .github/workflows/prices.yml and tickers.txt). Tickers not in that file fall back to a public relay. */
+  const DATA_URL='https://raw.githubusercontent.com/tttrismar/PULSE/data/prices.json';
+  const LIVE_TTL=10*60*1000;
   function toStooq(sym){ sym=sym.trim().toLowerCase(); return sym.includes('.')? sym : sym+'.us'; }
-  // imported holdings carry their own market suffix (w.stq), currency (w.cur) and price scale (London quotes are in pence)
-  const stooqOf=w=>w.stq||toStooq(w.sym);
+  // imported holdings carry their own market suffix (w.stq) and cost currency (w.cur)
+  const keyOf=w=>(w.stq||toStooq(w.sym)).toLowerCase();
   const CUR_SYM={USD:'$',GBP:'£',EUR:'€'};
-  const curSym=w=>CUR_SYM[(w&&w.cur)||'USD']||'';
+  const curOf=(w,q)=>(q&&q.cur)||(w&&w.cur)||'USD';
+  const curSym=(w,q)=>{ const c=curOf(w,q); return CUR_SYM[c]!=null? CUR_SYM[c] : c+' '; };
 
-  let goodProxy=0;
-  async function pxFetch(url){
-    const proxies=[
-      u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),
-      u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
-      u=>'https://corsproxy.io/?url='+encodeURIComponent(u),
-      u=>'https://thingproxy.freeboard.io/fetch/'+u,
-      u=>u
-    ];
+  // --- the next two functions are copies of scripts/quote.mjs — keep them in step ---
+  function yahooSym(key){
+    const i=key.lastIndexOf('.'); const base=key.slice(0,i).toUpperCase().replace(/\./g,'-'), mkt=key.slice(i+1);
+    return mkt==='us'? base : mkt==='uk'? base+'.L' : base+'.'+mkt.toUpperCase();
+  }
+  function parseYahoo(j){
+    const r=j && j.chart && j.chart.result && j.chart.result[0]; if(!r || !r.meta) throw new Error('no result');
+    const m=r.meta, ts=r.timestamp||[], cl=((r.indicators||{}).quote||[{}])[0].close||[], off=(m.gmtoffset||0)*1000;
+    const day=t=>new Date(t*1000+off).toISOString().slice(0,10);
+    const rows=[]; ts.forEach((t,i)=>{ if(cl[i]!=null) rows.push({d:day(t), c:cl[i]}); });
+    let price=m.regularMarketPrice; if(price==null && rows.length) price=rows[rows.length-1].c;
+    if(price==null) throw new Error('no price');
+    const today=m.regularMarketTime? day(m.regularMarketTime) : (rows.length? rows[rows.length-1].d : '');
+    const before=rows.filter(x=>x.d<today);
+    let prev=before.length? before[before.length-1].c : null;
+    let spark=before.slice(-31).map(x=>x.c).concat([price]);
+    let cur=m.currency||'USD', k=1;
+    if(cur==='GBp'||cur==='GBX'){ cur='GBP'; k=0.01; }   // London prices come in pence
+    const fix=n=>n==null? null : +(n*k).toFixed(4);
+    return { price:fix(price), prev:fix(prev), cur, name:m.shortName||m.longName||'', spark:spark.map(fix),
+      asof:m.regularMarketTime? new Date(m.regularMarketTime*1000).toISOString() : '' };
+  }
+
+  async function getJSON(url, ms){
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), ms||9000);
+    try{ const r=await fetch(url,{cache:'no-store', signal:ctrl.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
+    finally{ clearTimeout(to); }
+  }
+  // fallback for tickers the price job doesn't cover: public relays, last working one first
+  const RELAYS=[ u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u), u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u) ];
+  let goodRelay=0;
+  async function liveQuote(key){
+    const url='https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(yahooSym(key))+'?range=3mo&interval=1d';
+    const order=RELAYS.map((_,i)=>i); order.unshift(order.splice(goodRelay,1)[0]);
     let err;
-    const order=proxies.map((_,i)=>i); order.unshift(order.splice(goodProxy,1)[0]);   // last working route first
-    for(const pi of order){
-      const mk=proxies[pi];
-      try{
-        const ctrl=new AbortController();
-        const to=setTimeout(()=>ctrl.abort(), 9000);
-        const r=await fetch(mk(url),{cache:'no-store', signal:ctrl.signal});
-        clearTimeout(to);
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        const t=await r.text();
-        // valid CSV starts with Symbol/Date; reject HTML error pages
-        if(t && t.trim().length && !/^\s*</.test(t.trim())){ goodProxy=pi; return t; }
-        throw new Error('bad payload');
-      }catch(e){ err=e; }
-    }
+    for(const i of order){ try{ const q=parseYahoo(await getJSON(RELAYS[i](url))); goodRelay=i; return q; }catch(e){ err=e; } }
     throw err||new Error('fetch failed');
-  }
-
-  function parseLight(csv){
-    const lines=csv.trim().split(/\r?\n/); if(lines.length<2) return {};
-    const head=lines.shift().split(','); const ix=n=>head.indexOf(n);
-    const out={};
-    for(const ln of lines){
-      const c=ln.split(',');
-      const sym=(c[ix('Symbol')]||'').toLowerCase();
-      const close=parseFloat(c[ix('Close')]);
-      const open=parseFloat(c[ix('Open')]);
-      const name=(c[ix('Name')]||'').trim();
-      const date=(c[ix('Date')]||'').trim(), time=(c[ix('Time')]||'').trim();
-      if(sym) out[sym]={close:isNaN(close)?null:close, open:isNaN(open)?null:open, name, date, time};
-    }
-    return out;
-  }
-  function parseHist(csv){
-    const lines=csv.trim().split(/\r?\n/); lines.shift();
-    const rows=[];
-    for(const ln of lines){ const c=ln.split(','); const d=c[0]; const close=parseFloat(c[4]);
-      if(d && !isNaN(close)) rows.push({d, close}); }
-    return rows;
   }
 
   let refreshing=false, lastRefresh=0;
@@ -266,54 +259,36 @@
     if(!watch.length){ render(); return; }
     refreshing=true; lastRefresh=Date.now();
     setLoading(true); if(!quiet) showBanner('', '');
-    const stq=watch.map(stooqOf);
-    let light={};
-    try{
-      const url='https://stooq.com/q/l/?s='+stq.join(',')+'&f=sd2t2ohlcvn&h&e=csv';
-      light=parseLight(await pxFetch(url));
-    }catch(e){ /* fall back to history-only below */ }
 
-    const todayISO=new Date().toISOString().slice(0,10);
-    let okCount=0, asof='';
+    let file=null;
+    try{ file=await getJSON(DATA_URL+'?t='+Math.floor(Date.now()/60000)); }catch(e){}
+    const fq=(file&&file.quotes)||{};
+    let okCount=0; const missing=[];
     await Promise.all(watch.map(async (w)=>{
-      const sym=w.sym, key=stooqOf(w), sc=w.scale||1;
-      const old=quotes[sym]||{};
-      const q={ sym, name:old.name||'', price:null, prev:null, chg:null, pct:null, spark:[], asof:'' };
-      // daily history only changes once a day: reuse today's copy instead of downloading it on every refresh
-      let rows=(old.hist && old.hist.day===todayISO && old.hist.key===key)? old.hist.rows : null;
-      try{
-        if(!rows){
-          rows=parseHist(await pxFetch('https://stooq.com/q/d/l/?s='+key+'&i=d')).slice(-33);
-          if(rows.length) q.hist={day:todayISO, key, rows};
-        } else q.hist=old.hist;
-        if(rows.length){
-          q.spark=rows.slice(-32).map(r=>r.close);
-          const before=rows.filter(r=>r.d<todayISO);
-          q.prev = before.length? before[before.length-1].close : (rows.length>1? rows[rows.length-2].close : rows[rows.length-1].close);
-          q.price = rows[rows.length-1].close;
-          q.asof = rows[rows.length-1].d;
-        }
-      }catch(e){}
-      const L=light[key];
-      if(L){
-        if(L.close!=null) q.price=L.close;
-        if(L.name) q.name=L.name;
-        if(L.date){ q.asof=L.date+(L.time?(' '+L.time):''); asof=q.asof; }
-        if(q.prev==null && L.open!=null) q.prev=L.open;
+      const sym=w.sym, key=keyOf(w), old=quotes[sym];
+      let d=fq[key], src='file';
+      if(!d){
+        src='live';
+        if(old && old.key===key && old.src==='live' && old.price!=null && Date.now()-old.at<LIVE_TTL){ okCount++; return; }   // fresh enough
+        try{ d=await liveQuote(key); }catch(e){}
       }
-      if(sc!==1){ if(q.price!=null) q.price*=sc; if(q.prev!=null) q.prev*=sc; }
-      if(q.price!=null && q.prev!=null){ q.chg=q.price-q.prev; q.pct=q.prev? (q.chg/q.prev*100):0; okCount++; }
-      else if(q.price!=null){ okCount++; }
+      if(!d){ missing.push(sym); if(old && old.key===key && old.price!=null) return; quotes[sym]={sym,key,price:null,spark:[]}; return; }
+      const q={ sym, key, src, at:Date.now(), name:d.name||(old&&old.key===key&&old.name)||'', price:d.price, prev:d.prev,
+        cur:d.cur, spark:d.spark||[], asof:d.asof||'', chg:null, pct:null };
+      if(q.price!=null && q.prev!=null){ q.chg=q.price-q.prev; q.pct=q.prev? (q.chg/q.prev*100):0; }
+      if(q.price!=null) okCount++;
       quotes[sym]=q;
     }));
 
     setLoading(false); refreshing=false;
     for(const k of Object.keys(quotes)) if(!watch.some(w=>w.sym===k)) delete quotes[k];   // drop removed tickers from the cache
     if(okCount===0){
-      if(quiet){ document.getElementById('status').textContent='Update failed · retrying'; render(); return; }
-      showBanner('err','Couldn\'t load prices right now. The free data source may be busy or blocked — tap Refresh to try again. (A free API key would make this reliable — just ask.)');
+      document.getElementById('status').textContent='Update failed';
+      if(!quiet) showBanner('err','Couldn\'t load prices right now — check your connection and tap Refresh to try again.');
     } else {
-      document.getElementById('status').innerHTML = 'Updated '+timeNow()+ (asof?('<br>data as of '+asof):'');
+      const t=file&&file.updated? new Date(file.updated) : null;
+      document.getElementById('status').innerHTML='Updated '+timeNow()+(t&&!isNaN(t)? '<br>prices as of '+esc(t.toLocaleString([], {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})) : '');
+      if(missing.length && !quiet) showBanner('info','No price for '+missing.join(', ')+'. '+(missing.length>1?'They aren\'t':'It isn\'t')+' in the automatic price list (tickers.txt in the repository) and the backup source didn\'t answer.');
     }
     saveCache(); render();
   }
@@ -349,7 +324,7 @@
     if(settings.sort==='az') arr.sort((a,b)=>a.sym.localeCompare(b.sym));
     else if(settings.sort==='gainers') arr.sort((a,b)=>pct(b)-pct(a));
     else if(settings.sort==='losers') arr.sort((a,b)=>pct(a)-pct(b));
-    else arr.sort((a,b)=>Math.abs(pct(b))-Math.abs(pct(a))); // movers = biggest absolute move
+    else { const mv=w=>{ const q=quotes[w.sym]; return q&&q.pct!=null? Math.abs(q.pct) : -1; }; arr.sort((a,b)=>mv(b)-mv(a)); } // movers = biggest absolute move
     return arr;
   }
 
@@ -368,12 +343,12 @@
       if(settings.holdings){
         const shares=w.shares||0, cost=w.cost||0;
         const value = has? q.price*shares : null;
-        const pl = (has && cost)? (q.price-cost)*shares : null;
+        const pl = (has && cost && (!w.cur || !q.cur || w.cur===q.cur))? (q.price-cost)*shares : null;   // only when cost and price share a currency
         const plCls = pl==null?'' : (pl>=0?'up':'down');
         holdHtml=`<div class="hold">
           <span>Shares</span><input type="number" step="any" min="0" data-h="shares" value="${shares||''}" placeholder="0">
           <span>Avg cost</span><input type="number" step="any" min="0" data-h="cost" value="${cost||''}" placeholder="0">
-          <span class="pl ${plCls}">${value!=null?('Value '+fmtCur(value,curSym(w))) : ''}${pl!=null?('  ·  P/L '+(pl>=0?'+':'')+fmtCur(pl,curSym(w))):''}</span>
+          <span class="pl ${plCls}">${value!=null?('Value '+fmtCur(value,curSym(w,q))) : ''}${pl!=null?('  ·  P/L '+(pl>=0?'+':'')+fmtCur(pl,curSym(w,q))):''}</span>
         </div>`;
       }
       card.innerHTML=`
@@ -383,7 +358,7 @@
           <div class="name">${q.name? esc(q.name) : (has?'':'no data')}</div>
         </div>
         <div>
-          <div class="price mono">${has?(curSym(w)+fmtPrice(q.price)):'<span class=na>—</span>'}</div>
+          <div class="price mono">${has?(curSym(w,q)+fmtPrice(q.price)):'<span class=na>—</span>'}</div>
           <div class="chg mono ${dir}">${q.pct!=null? (arrow+' '+fmtChg(q.chg)+'  <span class="pill '+dir+'">'+fmtPct(q.pct)+'</span>') : ''}</div>
         </div>
         ${q.spark&&q.spark.length? '<div class="spark">'+sparkline(q.spark)+'</div>':''}
@@ -502,8 +477,9 @@
       let w=watch.find(x=>x.sym===p.sym);
       if(!w){ w={sym:p.sym}; watch.push(w); }
       w.shares=+p.shares.toFixed(8); w.cost=+(p.total/p.shares).toFixed(4); w.cur=p.cur;
-      if(p.cur==='GBP'){ w.stq=p.sym.toLowerCase().replace(/\.$/,'')+'.uk'; w.scale=0.01; }   // London listing, quoted in pence
-      else { delete w.stq; delete w.scale; }
+      delete w.scale;
+      if(p.cur==='GBP') w.stq=p.sym.toLowerCase().replace(/\.$/,'')+'.uk';   // London listing
+      else delete w.stq;
     }
     settings.holdings=true; document.getElementById('holdBtn').classList.add('on');
     await saveWatch(); await saveSet(); render();
