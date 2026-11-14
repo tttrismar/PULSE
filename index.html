@@ -456,7 +456,7 @@
     const iTick=col('ticker'), iSide=col('buy / sell','buy/sell'), iQty=col('quantity'), iTs=col('timestamp'),
           iPx=col('price per share'), iPxAcc=col('price per share in account currency'),
           iCur=col('instrument currency'), iAcc=col('account currency'), iIsin=col('isin'), iTitle=col('title'),
-          iType=col('type'), iDiv=col('dividend net distribution amount'), iTot=col('total amount');
+          iType=col('type'), iDiv=col('dividend net distribution amount'), iTot=col('total amount in account currency','total amount');
     if(iTick<0||iSide<0||iQty<0) throw new Error('This doesn\'t look like a Freetrade activity export (no Ticker / Buy / Sell / Quantity columns).');
     const num=v=>{ const n=parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; };
     const orders=[]; let dividends=0, accCur='';
