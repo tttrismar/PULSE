@@ -1,0 +1,43 @@
+name: Update prices
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - tickers.txt
+      - scripts/**
+      - .github/workflows/prices.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prices
+  cancel-in-progress: false
+
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch prices
+        run: |
+          curl -fsS "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/prices.json" -o previous.json || true
+          node scripts/fetch-prices.mjs tickers.txt prices.json previous.json
+      - name: Publish to the data branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && cp prices.json out/ && cd out
+          git init -q -b data
+          git config user.name "pulse-prices"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prices.json
+          git commit -q -m "Update prices"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
