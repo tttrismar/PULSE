@@ -687,7 +687,7 @@
         const name=el.querySelector('#kName').value.trim(), at18=el.querySelector('#kWhen').value;
         if(!name || !/^\d{4}-\d\d$/.test(at18) || ymDiff(ymNow(),at18)<12){ showBanner('err','Enter a name and the month they turn 18 (at least a year away).'); return; }
         showBanner('','');
-        settings.kids.push({name, at18, target:20000, saved:0, fund:'', basis:'worst', rate:5});
+        settings.kids.push({name, at18, target:20000, saved:0, fund:'', basis:'custom', rate:5});
         showTab('kid:'+(settings.kids.length-1)); saveSet();
       });
       return;
@@ -701,10 +701,11 @@
     const ranked=funds.map(f=>({f, bt:backtest(f,n)})).filter(x=>x.bt).sort((a,b)=>b.bt.typical-a.bt.typical);
     const short=funds.length-ranked.length;
     let cur=ranked.find(x=>x.f.key===k.fund);
-    if(!cur){ cur=ranked.find(x=>x.f.cat==='Global')||ranked[0]; }
+    if(!cur){ cur=['swda.uk','iwrd.uk','vwrl.uk','hmwo.uk'].map(key=>ranked.find(x=>x.f.key===key)).find(Boolean) || ranked.find(x=>x.f.cat==='Global') || ranked[0]; }   // default: a plain world tracker
     if(!cur){ el.innerHTML=`<div class="anhead" style="padding-top:14px">None of the funds has enough history to test a ${yrs.toFixed(0)}-year plan.</div>`; return; }
     const bt=cur.bt, custom=Math.max(-5,Math.min(20,+k.rate||0))/100;
-    const basisRate= k.basis==='typical'? bt.typical : k.basis==='custom'? custom : bt.worst;
+    if(!['custom','worst','typical'].includes(k.basis)) k.basis='custom';
+    const basisRate= k.basis==='typical'? bt.typical : k.basis==='worst'? bt.worst : custom;
     const need=monthlyNeeded(n, basisRate, k.saved, k.target), pr=project(n, basisRate, k.saved, need);
     const paid=k.saved+need*n, today=k.target/Math.pow(1+INFL,yrs);
     const age0=18-Math.ceil(yrs);
@@ -717,9 +718,8 @@
       const act= safeEnd===0? 'All of it in the fund' : safeEnd>=1? 'Everything in cash-like savings by the 18th birthday' : 'Have about '+Math.round(safeEnd*100)+'% in cash-like savings by this birthday';
       sched+=`<div class="krow${safeEnd>0?' safe':''}"><div class="t"><b>To age ${ageTo}</b><span>${act}</span></div><div class="r mono">${gbp(need)}/mo</div><div class="r mono">${gbp(pot)}</div></div>`;
     }
-    const scen=[['worst','Cautious','worst '+yrs.toFixed(0)+'-year stretch',bt.worst],['typical','Typical','middle of all stretches',bt.typical],['best','Lucky','best stretch',bt.best]]
-      .map(([id,label,sub,r])=>`<div class="krow${k.basis===id?' sel':''}"><div class="t"><b>${label}</b><span>${sub}</span></div><div class="r mono">${pc(r)}/yr</div><div class="r mono">${gbp(monthlyNeeded(n,r,k.saved,k.target))}/mo</div></div>`).join('')
-      + (k.basis==='custom'? `<div class="krow sel"><div class="t"><b>Your own rate</b></div><div class="r mono">${pc(custom)}/yr</div><div class="r mono">${gbp(need)}/mo</div></div>`:'');
+    const scen=[['custom','Prudent','the rate you choose below',custom],['worst','Worst in history','weakest '+yrs.toFixed(0)+'-year stretch',bt.worst],['typical','Typical in history','middle of all stretches',bt.typical],['best','Best in history','strongest stretch',bt.best]]
+      .map(([id,label,sub,r])=>`<div class="krow${k.basis===id?' sel':''}"><div class="t"><b>${label}</b><span>${sub}</span></div><div class="r mono">${pc(r)}/yr</div><div class="r mono">${gbp(monthlyNeeded(n,r,k.saved,k.target))}/mo</div></div>`).join('');
     const showAll=el.dataset.all==='1', list=showAll? ranked : ranked.slice(0,8);
     const rank=list.map(x=>`<div class="krow pick${x.f.key===cur.f.key?' sel':''}" data-fund="${esc(x.f.key)}"><div class="t"><b>${esc(x.f.sym)}</b> <span class="cat">${esc(x.f.cat)}</span><span>${esc(x.f.name||'')} · data from ${x.bt.from}</span></div><div class="r mono">${pc(x.bt.typical)}</div><div class="r mono">${pc(x.bt.worst)}</div></div>`).join('');
     // the longest view the data allows: £100 a month over the last 18 years
@@ -739,12 +739,13 @@
         <label>Goal at 18 (£)<input id="kTarget" type="number" inputmode="numeric" min="0" step="500" value="${k.target}"></label>
         <label>Saved so far (£)<input id="kSaved" type="number" inputmode="numeric" min="0" step="50" value="${k.saved}"></label>
         <label class="wide">Fund<select id="kFund">${ranked.map(x=>`<option value="${esc(x.f.key)}"${x.f.key===cur.f.key?' selected':''}>${esc(x.f.sym)} — ${esc(x.f.name||'')}</option>`).join('')}</select></label>
-        <label>Plan for<select id="kBasis"><option value="worst">Cautious</option><option value="typical">Typical</option><option value="custom">My own rate</option></select></label>
-        <label>${k.basis==='custom'?'Growth per year (%)':'Turns 18 in'}${k.basis==='custom'? `<input id="kRate" type="number" inputmode="decimal" step="0.5" min="-5" max="20" value="${k.rate}">` : `<input id="kWhen" type="month" value="${esc(k.at18)}">`}</label>
+        <label>Plan for<select id="kBasis"><option value="custom">Prudent (my rate)</option><option value="worst">Worst in history</option><option value="typical">Typical in history</option></select></label>
+        <label>Turns 18 in<input id="kWhen" type="month" value="${esc(k.at18)}"></label>
+        ${k.basis==='custom'? `<label class="wide">Growth per year to plan on (%)<input id="kRate" type="number" inputmode="decimal" step="0.5" min="-5" max="20" value="${k.rate}"></label>`:''}
       </div>
 
       <div class="sect"><h2>What history says</h2><span class="ln"></span></div>
-      <div class="ktext">Paying in monthly for ${yrs.toFixed(0)} years, tested on all <b>${bt.count}</b> such stretches of ${esc(cur.f.sym)} that started between ${bt.from} and ${bt.to}:</div>
+      <div class="ktext">Paying in monthly for ${yrs.toFixed(0)} years, tested on all <b>${bt.count}</b> such stretches of ${esc(cur.f.sym)} that started between ${bt.from} and ${bt.to}. That whole era was unusually good for shares, so the plan defaults to a more prudent rate.</div>
       <div class="ktable"><div class="krow h"><div>Outcome</div><div class="r">Growth</div><div class="r">Needed</div></div>${scen}</div>
 
       <div class="sect"><h2>Year by year</h2><span class="ln"></span></div>
@@ -765,10 +766,10 @@
       <div class="ktext">What £100 a month (${gbp(LONG_Y*1200)} paid in) became over the last ${LONG_Y} years. Price records for these funds only start in 2008–09, so a full 18-year test isn't possible yet; ${long.length} fund${long.length===1?' has':'s have'} ${LONG_Y} years.</div>
       <div class="ktable"><div class="krow h"><div>Fund</div><div class="r">Growth</div><div class="r">Worth now</div></div>${longRows}</div>` : ''}
 
-      <div class="ktext" style="padding-top:14px">This is arithmetic on past prices, not financial advice, and the past does not predict the future. Fund histories here mostly begin after the 2008 crash, a strong period for shares, so even the "cautious" figure may prove optimistic. Figures include reinvested dividends and ignore fees and tax. The value of investments can fall as well as rise. In the UK a Junior ISA shelters a child's investments from tax, but the money becomes theirs at 18 — check the current rules and allowance.</div>
+      <div class="ktext" style="padding-top:14px">This is arithmetic on past prices, not financial advice, and the past does not predict the future. Fund histories here mostly begin after the 2008 crash, a strong period for shares, so even the worst stretch on record may prove optimistic — which is why the plan starts from a prudent 5% a year. Figures include reinvested dividends and ignore fees and tax. The value of investments can fall as well as rise. In the UK a Junior ISA shelters a child's investments from tax, but the money becomes theirs at 18 — check the current rules and allowance.</div>
       <button class="linkbtn danger" id="kDel">Remove ${esc(k.name)}'s tab</button>`;
 
-    el.querySelector('#kBasis').value= ['worst','typical','custom'].includes(k.basis)? k.basis : 'worst';
+    el.querySelector('#kBasis').value=k.basis;
     const num=(id,key,min)=>{ const i=el.querySelector(id); if(i) i.addEventListener('change',e=>{ const v=parseFloat(e.target.value); k[key]=isNaN(v)? min : Math.max(min,v); saveSet(); renderKid(); }); };
     num('#kTarget','target',0); num('#kSaved','saved',0); num('#kRate','rate',-5);
     el.querySelector('#kFund').addEventListener('change',e=>{ k.fund=e.target.value; saveSet(); renderKid(); });
@@ -785,7 +786,7 @@
     let added=-1;
     decodeURIComponent(m[1]).split(',').forEach(part=>{ const [name,at18]=part.split(':').map(x=>(x||'').trim());
       if(!name || !/^\d{4}-\d\d$/.test(at18) || settings.kids.some(k=>k.name.toLowerCase()===name.toLowerCase())) return;
-      settings.kids.push({name:name.slice(0,20), at18, target:20000, saved:0, fund:'', basis:'worst', rate:5}); if(added<0) added=settings.kids.length-1; });
+      settings.kids.push({name:name.slice(0,20), at18, target:20000, saved:0, fund:'', basis:'custom', rate:5}); if(added<0) added=settings.kids.length-1; });
     try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){}
     if(added>=0){ settings.tab='kid:'+added; saveSet(); }
     return added>=0;
