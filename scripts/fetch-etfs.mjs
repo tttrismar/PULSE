@@ -1,5 +1,5 @@
-// ETF performance job: reads etfs.txt, fetches up to 10 years of daily dividend-adjusted prices per fund,
-// and writes the returns the Analysis tab ranks. Long history changes slowly, so this only refetches
+// ETF performance job: reads etfs.txt, fetches each fund's full daily price and dividend history, and writes
+// the returns the Analysis tab ranks plus a month-end total-return series for the children's planner tabs. Long history changes slowly, so this only refetches
 // when the list changes or the previous file is older than MAX_AGE_H hours.
 // usage: node scripts/fetch-etfs.mjs etfs.txt etfs.json [previous-etfs.json]
 import {readFileSync, writeFileSync, existsSync} from 'node:fs';
@@ -11,7 +11,7 @@ const list=readFileSync(listPath,'utf8').split(/\r?\n/).map(l=>l.replace(/#.*/,'
   const [t,cat]=l.split(',').map(x=>x.trim()); const key=t.toLowerCase();
   return {key:key.includes('.')? key : key+'.us', cat:cat||'Other'};
 });
-const sig='v2:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
+const sig='v3:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
 let prev=null; try{ if(prevPath && existsSync(prevPath)) prev=JSON.parse(readFileSync(prevPath,'utf8')); }catch(e){}
 if(prev && prev.sig===sig && Date.now()-Date.parse(prev.updated)<MAX_AGE_H*3600e3){
   writeFileSync(outPath, JSON.stringify(prev)); console.log('ETF data is fresh (', prev.updated, ') — reused'); process.exit(0);
@@ -19,8 +19,8 @@ if(prev && prev.sig===sig && Date.now()-Date.parse(prev.updated)<MAX_AGE_H*3600e
 
 const iso=d=>d.toISOString().slice(0,10);
 async function history(key){
-  const url='https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(yahooSym(key))+'?range=10y&interval=1d&events=div';
-  const r=await fetch(url,{headers:{'User-Agent':'pulse-price-job','Accept':'*/*'}, signal:AbortSignal.timeout(30000)});
+  const url='https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(yahooSym(key))+'?period1=0&period2='+Math.floor(Date.now()/1000)+'&interval=1d&events=div';
+  const r=await fetch(url,{headers:{'User-Agent':'pulse-price-job','Accept':'*/*'}, signal:AbortSignal.timeout(60000)});
   if(!r.ok) throw new Error('HTTP '+r.status);
   const res=(await r.json()).chart.result[0], m=res.meta, ts=res.timestamp||[], off=(m.gmtoffset||0)*1000;
   const close=res.indicators.quote[0].close;
@@ -56,7 +56,12 @@ function returns(rows){
     const ok= base && fin && base.d>=(yr-1)+'-12-20';
     if(yr===thisYear) r.ytd= ok? pct(fin.c, base.c) : null; else if(ok) y[yr]=pct(fin.c, base.c);
   }
-  return {r, y, since:first.d, asof:last.d};
+  // month-end total-return index (first month = 100), complete months only — used for monthly-investing backtests
+  const ends=[]; for(let i=0;i<rows.length;i++){ const ym=rows[i].d.slice(0,7); if(i+1<rows.length && rows[i+1].d.slice(0,7)===ym) continue; if(i+1<rows.length) ends.push({ym, c:rows[i].c}); }
+  const v=[]; let cur=ends.length? ends[0].ym : '';
+  for(const e of ends){ while(cur<e.ym){ v.push(v.length? v[v.length-1] : 100); let [Y,M]=cur.split('-').map(Number); M++; if(M>12){ M=1; Y++; } cur=Y+'-'+String(M).padStart(2,'0'); }
+    v.push(+(e.c/ends[0].c*100).toFixed(3)); let [Y,M]=cur.split('-').map(Number); M++; if(M>12){ M=1; Y++; } cur=Y+'-'+String(M).padStart(2,'0'); }
+  return {r, y, since:first.d, asof:last.d, m: ends.length>12? {s:ends[0].ym, v} : null};
 }
 
 const funds=[]; let ok=0;

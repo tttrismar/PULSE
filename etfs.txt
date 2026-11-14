@@ -1,6 +1,7 @@
 # ETFs ranked in the Analysis tab: ticker, category. One per line.
 # London-listed funds end in .UK (pound-priced lines where one exists).
 VWRL.UK, Global
+IWRD.UK, Global
 VWRP.UK, Global
 SWDA.UK, Global
 HMWO.UK, Global
@@ -17,6 +18,7 @@ CNX1.UK, US
 VUKE.UK, UK
 ISF.UK, UK
 VMID.UK, UK
+MIDD.UK, UK
 IUKD.UK, UK
 IUKP.UK, UK
 VERX.UK, Europe
@@ -25,6 +27,8 @@ VJPN.UK, Asia & emerging
 VAPX.UK, Asia & emerging
 VFEM.UK, Asia & emerging
 EMIM.UK, Asia & emerging
+IEEM.UK, Asia & emerging
+IJPN.UK, Asia & emerging
 IIND.UK, Asia & emerging
 IITU.UK, Tech & themes
 SMGB.UK, Tech & themes
