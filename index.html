@@ -141,6 +141,8 @@
     </select>
     <button class="chipbtn" id="holdBtn" title="Show holdings & P/L">💼 Holdings</button>
     <button class="chipbtn" id="editBtn" title="Edit list">✎ Edit</button>
+    <button class="chipbtn" id="importBtn" title="Import a Freetrade activity export (CSV)">⬆ Freetrade CSV</button>
+    <input type="file" id="importFile" accept=".csv,text/csv" hidden>
   </div>
 
   <div class="addrow">
@@ -158,6 +160,7 @@
   <div class="pnote">These are private companies with no public share price. Set a valuation you're tracking, and tap <b>News</b> for the latest.</div>
 
   <footer>
+    Freetrade imports are read in your browser only — the file is never uploaded anywhere.<br>
     Prices via a free public source (Stooq) and are <b>delayed</b>, for personal reference only — not investment advice.<br>
     Pulse is a tracker, not a broker. Always verify before making any decision.
   </footer>
@@ -200,6 +203,10 @@
 
   /* ---------- data fetching (no API key) ---------- */
   function toStooq(sym){ sym=sym.trim().toLowerCase(); return sym.includes('.')? sym : sym+'.us'; }
+  // imported holdings carry their own market suffix (w.stq), currency (w.cur) and price scale (London quotes are in pence)
+  const stooqOf=w=>w.stq||toStooq(w.sym);
+  const CUR_SYM={USD:'$',GBP:'£',EUR:'€'};
+  const curSym=w=>CUR_SYM[(w&&w.cur)||'USD']||'';
 
   async function pxFetch(url){
     const proxies=[
@@ -252,8 +259,7 @@
   async function refreshAll(){
     if(!watch.length){ render(); return; }
     setLoading(true); showBanner('', '');
-    const syms=watch.map(w=>w.sym);
-    const stq=syms.map(toStooq);
+    const stq=watch.map(stooqOf);
     let light={};
     try{
       const url='https://stooq.com/q/l/?s='+stq.join(',')+'&f=sd2t2ohlcvn&h&e=csv';
@@ -262,8 +268,8 @@
 
     const todayISO=new Date().toISOString().slice(0,10);
     let okCount=0, asof='';
-    await Promise.all(syms.map(async (sym)=>{
-      const key=toStooq(sym);
+    await Promise.all(watch.map(async (w)=>{
+      const sym=w.sym, key=stooqOf(w), sc=w.scale||1;
       const q={ sym, name:'', price:null, prev:null, chg:null, pct:null, spark:[], asof:'' };
       try{
         const hurl='https://stooq.com/q/d/l/?s='+key+'&i=d';
@@ -283,6 +289,7 @@
         if(L.date){ q.asof=L.date+(L.time?(' '+L.time):''); asof=q.asof; }
         if(q.prev==null && L.open!=null) q.prev=L.open;
       }
+      if(sc!==1){ if(q.price!=null) q.price*=sc; if(q.prev!=null) q.prev*=sc; }
       if(q.price!=null && q.prev!=null){ q.chg=q.price-q.prev; q.pct=q.prev? (q.chg/q.prev*100):0; okCount++; }
       else if(q.price!=null){ okCount++; }
       quotes[sym]=q;
@@ -352,17 +359,17 @@
         holdHtml=`<div class="hold">
           <span>Shares</span><input type="number" step="any" min="0" data-h="shares" value="${shares||''}" placeholder="0">
           <span>Avg cost</span><input type="number" step="any" min="0" data-h="cost" value="${cost||''}" placeholder="0">
-          <span class="pl ${plCls}">${value!=null?('Value '+fmtCur(value)) : ''}${pl!=null?('  ·  P/L '+(pl>=0?'+':'')+fmtCur(pl)):''}</span>
+          <span class="pl ${plCls}">${value!=null?('Value '+fmtCur(value,curSym(w))) : ''}${pl!=null?('  ·  P/L '+(pl>=0?'+':'')+fmtCur(pl,curSym(w))):''}</span>
         </div>`;
       }
       card.innerHTML=`
         <button class="rm" title="Remove" data-rm>✕</button>
         <div>
-          <div class="sym">${w.sym}</div>
+          <div class="sym">${esc(w.sym)}</div>
           <div class="name">${q.name? esc(q.name) : (has?'':'no data')}</div>
         </div>
         <div>
-          <div class="price mono">${has?('$'+fmtPrice(q.price)):'<span class=na>—</span>'}</div>
+          <div class="price mono">${has?(curSym(w)+fmtPrice(q.price)):'<span class=na>—</span>'}</div>
           <div class="chg mono ${dir}">${q.pct!=null? (arrow+' '+fmtChg(q.chg)+'  <span class="pill '+dir+'">'+fmtPct(q.pct)+'</span>') : ''}</div>
         </div>
         ${q.spark&&q.spark.length? '<div class="spark">'+sparkline(q.spark)+'</div>':''}
@@ -400,7 +407,7 @@
       pl.appendChild(card);
     });
   }
-  function fmtCur(n){ const s=n<0?'-':''; n=Math.abs(n); return s+'$'+n.toLocaleString(undefined,{maximumFractionDigits:2}); }
+  function fmtCur(n,sym){ const s=n<0?'-':''; n=Math.abs(n); return s+(sym==null?'$':sym)+n.toLocaleString(undefined,{maximumFractionDigits:2}); }
   function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   function setLoading(on){ const b=document.getElementById('refreshBtn'); b.classList.toggle('loading',on); b.disabled=on;
@@ -426,6 +433,75 @@
   }
   document.getElementById('addBtn').addEventListener('click',addTicker);
   document.getElementById('addInput').addEventListener('keydown',e=>{ if(e.key==='Enter') addTicker(); });
+
+  /* ---------- Freetrade activity export (CSV) import ---------- */
+  function parseCSV(text){
+    const rows=[]; let row=[], cell='', q=false;
+    text=text.replace(/^\uFEFF/,'');
+    for(let i=0;i<text.length;i++){
+      const c=text[i];
+      if(q){ if(c==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else q=false; } else cell+=c; }
+      else if(c==='"') q=true;
+      else if(c===','){ row.push(cell); cell=''; }
+      else if(c==='\n'||c==='\r'){ if(c==='\r'&&text[i+1]==='\n') i++; row.push(cell); cell=''; if(row.some(x=>x!=='')) rows.push(row); row=[]; }
+      else cell+=c;
+    }
+    row.push(cell); if(row.some(x=>x!=='')) rows.push(row);
+    return rows;
+  }
+  function freetradeHoldings(text){
+    const rows=parseCSV(text); if(rows.length<2) throw new Error('The file is empty.');
+    const head=rows.shift().map(h=>h.trim().toLowerCase());
+    const col=(...names)=>{ for(const n of names){ const i=head.indexOf(n); if(i>=0) return i; } return -1; };
+    const iTick=col('ticker'), iSide=col('buy / sell','buy/sell'), iQty=col('quantity'), iTs=col('timestamp'),
+          iPx=col('price per share'), iPxAcc=col('price per share in account currency'),
+          iCur=col('instrument currency'), iAcc=col('account currency'), iIsin=col('isin'), iTitle=col('title'),
+          iType=col('type'), iDiv=col('dividend net distribution amount'), iTot=col('total amount');
+    if(iTick<0||iSide<0||iQty<0) throw new Error('This doesn\'t look like a Freetrade activity export (no Ticker / Buy / Sell / Quantity columns).');
+    const num=v=>{ const n=parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; };
+    const orders=[]; let dividends=0, accCur='';
+    for(const r of rows){
+      if(iAcc>=0 && r[iAcc]) accCur=r[iAcc].trim().toUpperCase();
+      if(iType>=0 && /DIVIDEND/i.test(r[iType]||'')) dividends+= num(iDiv>=0&&r[iDiv]? r[iDiv] : (iTot>=0? r[iTot]:0));
+      const side=(r[iSide]||'').trim().toUpperCase(), sym=(r[iTick]||'').trim().toUpperCase(), qty=num(r[iQty]);
+      if(!sym || !qty || (side!=='BUY'&&side!=='SELL')) continue;
+      let cur=(iCur>=0? r[iCur]:'').trim().toUpperCase(), px=iPx>=0? num(r[iPx]) : 0;
+      if(!px || !cur){ px=iPxAcc>=0? num(r[iPxAcc]):0; cur=accCur||'GBP'; }   // fall back to account-currency price
+      orders.push({sym, side, qty, px, cur, ts:(iTs>=0? r[iTs]:''), isin:(iIsin>=0? r[iIsin]:'').trim().toUpperCase(), title:(iTitle>=0? r[iTitle]:'').trim()});
+    }
+    orders.sort((a,b)=>String(a.ts).localeCompare(String(b.ts)));   // ISO timestamps: oldest first
+    const pos={};
+    for(const o of orders){
+      const p=pos[o.sym]||(pos[o.sym]={sym:o.sym, shares:0, total:0, cur:o.cur, isin:o.isin, title:o.title});
+      if(o.side==='BUY'){ p.shares+=o.qty; p.total+=o.qty*o.px; }
+      else { const avg=p.shares>0? p.total/p.shares : 0; p.shares=Math.max(0,p.shares-o.qty); p.total=avg*p.shares; }   // average-cost method
+    }
+    const open=Object.values(pos).filter(p=>p.shares>1e-8);
+    return {open, orders:orders.length, closed:Object.keys(pos).length-open.length, dividends, accCur};
+  }
+  async function importFreetrade(file){
+    let res;
+    try{ res=freetradeHoldings(await file.text()); }
+    catch(e){ showBanner('err','Import failed: '+e.message); return; }
+    if(!res.orders){ showBanner('err','No buy or sell orders found in that file.'); return; }
+    for(const p of res.open){
+      let w=watch.find(x=>x.sym===p.sym);
+      if(!w){ w={sym:p.sym}; watch.push(w); }
+      w.shares=+p.shares.toFixed(8); w.cost=+(p.total/p.shares).toFixed(4); w.cur=p.cur;
+      if(p.cur==='GBP'){ w.stq=p.sym.toLowerCase().replace(/\.$/,'')+'.uk'; w.scale=0.01; }   // London listing, quoted in pence
+      else { delete w.stq; delete w.scale; }
+    }
+    settings.holdings=true; document.getElementById('holdBtn').classList.add('on');
+    await saveWatch(); await saveSet(); render();
+    await refreshAll();
+    showBanner('info','Imported '+res.open.length+' holding'+(res.open.length===1?'':'s')+' from '+res.orders+' Freetrade orders'
+      +(res.closed? ' ('+res.closed+' closed position'+(res.closed===1?'':'s')+' skipped)':'')
+      +(res.dividends? ' · dividends received '+fmtCur(res.dividends, CUR_SYM[res.accCur]||'£'):'')+'.');
+  }
+  document.getElementById('importBtn').addEventListener('click',()=>document.getElementById('importFile').click());
+  document.getElementById('importFile').addEventListener('change',async e=>{
+    const f=e.target.files[0]; e.target.value=''; if(f) await importFreetrade(f);
+  });
 
   /* ---------- init ---------- */
   (async function(){
