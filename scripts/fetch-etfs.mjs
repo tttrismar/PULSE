@@ -27,6 +27,8 @@ async function history(key){
   let rows=[]; ts.forEach((t,i)=>{ if(adj[i]!=null && adj[i]>0) rows.push({d:iso(new Date(t*1000+off)), c:adj[i]}); });
   // some London lines flip between pence and pounds in the source: undo x100 jumps
   let k=1; for(let i=1;i<rows.length;i++){ const ratio=rows[i].c*k/rows[i-1].c; if(ratio>50) k/=100; else if(ratio<0.02) k*=100; rows[i].c*=k; }
+  if(process.env.DEBUG_DIV){ const q=res.indicators.quote[0].close, dv=Object.values((res.events||{}).dividends||{}).sort((x,y)=>x.date-y.date);
+    const i0=q.findIndex(v=>v!=null); console.log('DBG', key, m.currency, 'close0', q[i0], 'adj0', adj[i0], 'closeN', q[q.length-1], 'ndiv', dv.length, 'last', dv.slice(-4).map(d=>iso(new Date(d.date*1000))+':'+d.amount).join(' ')); }
   if(rows.length<30) throw new Error('too little history');
   return {rows, name:m.longName||m.shortName||'', cur:(m.currency==='GBp'||m.currency==='GBX')?'GBP':(m.currency||'')};
 }

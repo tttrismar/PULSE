@@ -35,7 +35,7 @@ jobs:
         continue-on-error: true
         run: |
           curl -fsS "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/etfs.json" -o previous-etfs.json || true
-          node scripts/fetch-etfs.mjs etfs.txt etfs.json previous-etfs.json
+          DEBUG_DIV=1 node scripts/fetch-etfs.mjs etfs.txt etfs.json /dev/null
       - name: Publish to the data branch
         env:
           GITHUB_TOKEN: ${{ github.token }}
