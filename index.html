@@ -110,8 +110,9 @@
   .pnote{color:var(--muted);font-size:12px;line-height:1.5;padding:2px 6px 0;}
 
   /* tabs + analysis */
-  .tabs{display:flex;gap:6px;margin:4px 18px 6px;padding:4px;background:var(--bg2);border:1px solid var(--line);border-radius:14px;}
-  .tab{flex:1;font-family:inherit;font-size:14px;font-weight:700;color:var(--muted);background:transparent;border:none;border-radius:10px;padding:10px 8px;cursor:pointer;}
+  .tabs{display:flex;gap:6px;margin:4px 18px 6px;padding:4px;background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow-x:auto;scrollbar-width:none;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab{flex:1 0 auto;white-space:nowrap;font-family:inherit;font-size:14px;font-weight:700;color:var(--muted);background:transparent;border:none;border-radius:10px;padding:10px 8px;cursor:pointer;}
   .tab.on{background:var(--panel2);color:var(--text);}
   [hidden]{display:none !important;}
   .erow{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:grid;
@@ -125,6 +126,35 @@
   .erow .ebar i.up{background:var(--up);} .erow .ebar i.down{background:var(--down);}
   .cat{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;padding:3px 6px;border-radius:6px;background:rgba(76,154,255,.14);color:#a9ccff;}
   .erow.nodata{opacity:.55;}
+  /* children's planner */
+  .kform{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:6px 18px 4px;}
+  .kform label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;font-weight:600;color:var(--muted);min-width:0;}
+  .kform label.wide{grid-column:1 / -1;}
+  .kform input,.kform select{width:100%;min-width:0;font-family:inherit;font-size:15px;font-weight:600;color:var(--text);background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none;}
+  .kform input:focus,.kform select:focus{border-color:var(--accent);}
+  .hero{margin:10px 14px 4px;padding:18px 16px;border-radius:var(--radius);border:1px solid var(--line);
+    background:linear-gradient(135deg,rgba(76,154,255,.14),rgba(123,97,255,.10) 60%,var(--panel));}
+  .hero .hl{font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);}
+  .hero .hv{font-size:34px;font-weight:800;margin:6px 0 4px;letter-spacing:-.5px;}
+  .hero .hv small{font-size:15px;font-weight:600;color:var(--muted);letter-spacing:0;}
+  .hero .hs{font-size:13px;color:var(--muted);line-height:1.55;}
+  .hero .hs b{color:var(--text);}
+  .ktable{margin:4px 14px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel);}
+  .krow{display:grid;grid-template-columns:minmax(0,1.5fr) auto auto;gap:4px 12px;align-items:center;padding:10px 13px;border-top:1px solid var(--line);font-size:13px;}
+  .krow:first-child{border-top:none;}
+  .krow.h{font-size:10.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);background:var(--bg2);}
+  .krow .r{text-align:right;white-space:nowrap;}
+  .krow .t b{font-weight:700;} .krow .t span{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.4;}
+  .krow.sel{background:rgba(76,154,255,.10);}
+  .krow.pick{cursor:pointer;}
+  .krow.safe .t b{color:#ffd58a;}
+  .linkbtn{font-family:inherit;font-size:12.5px;font-weight:700;color:var(--accent);background:none;border:none;padding:8px 20px;cursor:pointer;}
+  .linkbtn.danger{color:var(--down);}
+  .ktext{color:var(--muted);font-size:12.5px;line-height:1.6;padding:4px 20px 2px;}
+  .ktext b{color:var(--text);}
+  .ktext ol{margin:6px 0 0;padding-left:20px;} .ktext li{margin-bottom:6px;}
+
   .anhead{color:var(--muted);font-size:12px;line-height:1.5;padding:2px 20px 8px;}
 
   .banner{margin:0 18px 8px;padding:11px 13px;border-radius:12px;font-size:12.5px;line-height:1.5;display:none;}
@@ -149,10 +179,9 @@
     <div class="status" id="status">Not updated yet</div>
   </header>
 
-  <div class="tabs" role="tablist">
-    <button class="tab on" id="tabWatch" role="tab">Watchlist</button>
-    <button class="tab" id="tabAnalysis" role="tab">Analysis</button>
-  </div>
+  <div class="tabs" role="tablist" id="tabs"></div>
+
+  <div id="viewKid" hidden></div>
 
   <div id="viewAnalysis" hidden>
     <div class="toolbar">
@@ -213,7 +242,7 @@
 
   let watch=[];      // [{sym, shares, cost}]
   let priv=[];       // [{name, val, asof, q}]
-  let settings={sort:'movers', holdings:false, edit:false, tab:'watch', anPeriod:'5y', anCat:'', anAnn:false};
+  let settings={sort:'movers', holdings:false, edit:false, tab:'watch', anPeriod:'5y', anCat:'', anAnn:false, kids:[]};
   let quotes={};     // sym -> {price, prev, chg, pct, name, spark:[], asof}
 
   const DEFAULT_WATCH=[
@@ -536,13 +565,13 @@
   async function loadEtfs(){
     if(etfState==='loading') return;
     if(!etfs){ try{ const r=await store.get(EKEY); if(r) etfs=JSON.parse(r); }catch(e){} }
-    if(etfs && etfs.at && Date.now()-etfs.at<3600e3){ renderAnalysis(); return; }   // checked within the hour
+    if(etfs && etfs.at && Date.now()-etfs.at<3600e3 && (etfs.funds||[]).some(f=>f.m)){ renderAnalysis(); if(!document.getElementById('viewKid').hidden) renderKid(); return; }   // checked within the hour
     etfState='loading'; renderAnalysis();
     try{ const d=await getJSON(ETF_URL+'?t='+Math.floor(Date.now()/3600e3), 15000);
       if(d && d.funds){ etfs={at:Date.now(), updated:d.updated, funds:d.funds}; store.set(EKEY, JSON.stringify(etfs)); }
       etfState='idle';
     }catch(e){ etfState='error'; }
-    renderAnalysis();
+    renderAnalysis(); if(!document.getElementById('viewKid').hidden) renderKid();
   }
   function etfReturn(f, period){
     if(/^\d{4}$/.test(period)) return f.y && f.y[period]!=null? f.y[period] : null;
@@ -589,24 +618,187 @@
         <div class="er mono na">since ${esc((x.f.since||'').slice(0,4))}</div>
       </div>`).join('');
   }
-  function showTab(tab){
-    settings.tab= tab==='analysis'? 'analysis' : 'watch';
-    const an=settings.tab==='analysis';
-    document.getElementById('viewAnalysis').hidden=!an; document.getElementById('viewWatch').hidden=an;
-    document.getElementById('tabAnalysis').classList.toggle('on',an); document.getElementById('tabWatch').classList.toggle('on',!an);
-    if(an) loadEtfs();
+  function renderTabs(){
+    const t=settings.tab, items=[['watch','Watchlist'],['analysis','Analysis'], ...settings.kids.map((k,i)=>['kid:'+i, k.name]), ['addkid','＋ Child']];
+    const bar=document.getElementById('tabs');
+    bar.innerHTML=items.map(([id,label])=>`<button class="tab${id===t?' on':''}" role="tab" data-tab="${id}">${esc(label)}</button>`).join('');
+    bar.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{ showTab(b.dataset.tab); saveSet(); }));
+    const on=bar.querySelector('.on'); if(on && on.scrollIntoView) on.scrollIntoView({block:'nearest', inline:'nearest'});
   }
-  document.getElementById('tabWatch').addEventListener('click',()=>{ showTab('watch'); saveSet(); });
-  document.getElementById('tabAnalysis').addEventListener('click',()=>{ showTab('analysis'); saveSet(); });
+  function showTab(tab){
+    const m=/^kid:(\d+)$/.exec(tab||'');
+    if(m && !settings.kids[+m[1]]) tab='watch';
+    if(!['watch','analysis','addkid'].includes(tab) && !/^kid:\d+$/.test(tab)) tab='watch';
+    settings.tab=tab;
+    const kid=tab==='addkid' || tab.startsWith('kid:');
+    document.getElementById('viewAnalysis').hidden=tab!=='analysis'; document.getElementById('viewWatch').hidden=tab!=='watch';
+    document.getElementById('viewKid').hidden=!kid;
+    renderTabs();
+    if(tab==='analysis') loadEtfs();
+    if(kid){ renderKid(); loadEtfs(); }
+  }
+
   document.getElementById('anPeriod').addEventListener('change',e=>{ settings.anPeriod=e.target.value; saveSet(); renderAnalysis(); });
   document.getElementById('anCat').addEventListener('change',e=>{ settings.anCat=e.target.value; saveSet(); renderAnalysis(); });
   document.getElementById('anAnn').addEventListener('click',()=>{ settings.anAnn=!settings.anAnn; saveSet(); renderAnalysis(); });
+
+  /* ---------- children's planner: monthly investing towards an 18th birthday ---------- */
+  const SAFE_RATE=0.03, GLIDE=36, INFL=0.025;   // cash-like growth, months of de-risking before 18, inflation used for "today's money"
+  const gbp=n=>(n<0?'-':'')+'£'+Math.round(Math.abs(n)).toLocaleString();
+  const pc=n=>(n>=0?'+':'')+(n*100).toFixed(1)+'%';
+  const ymNow=()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
+  const ymDiff=(a,b)=>{ const [ay,am]=a.split('-').map(Number), [by,bm]=b.split('-').map(Number); return (by-ay)*12+(bm-am); };
+  const ymLabel=ym=>{ const [y,m]=ym.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString([], {month:'short', year:'numeric'}); };
+  // value at the end of n months of paying £1 at the start of each month, at monthly growth g
+  const annuity=(g,n)=>Math.abs(g)<1e-9? n : (1+g)*(Math.pow(1+g,n)-1)/g;
+  function rateFor(fv,n){ let lo=-0.03, hi=0.06; for(let i=0;i<60;i++){ const mid=(lo+hi)/2; if(annuity(mid,n)<fv) lo=mid; else hi=mid; } return Math.pow(1+(lo+hi)/2,12)-1; }
+  // every n-month stretch in the fund's history: what £1 a month became, as a yearly growth rate
+  function backtest(f,n){
+    const v=f.m&&f.m.v; if(!v || v.length<n+13) return null;
+    const rates=[]; for(let i=0;i+n<v.length;i++){ let fv=0; for(let k=0;k<n;k++) fv+=v[i+n]/v[i+k]; rates.push(rateFor(fv,n)); }
+    const sorted=rates.slice().sort((a,b)=>a-b);
+    const [y,m]=f.m.s.split('-').map(Number), add=k=>{ const d=new Date(y,m-1+k,1); return d.getFullYear(); };
+    return {worst:sorted[0], typical:sorted[Math.floor(sorted.length/2)], best:sorted[sorted.length-1], latest:rates[rates.length-1],
+      count:rates.length, from:add(0), to:add(rates.length-1)};
+  }
+  // growth of the pot month by month, moving steadily into cash-like holdings over the last GLIDE months
+  function project(n, yearly, saved, monthly){
+    const g=Math.pow(1+yearly,1/12)-1, sgr=Math.pow(1+SAFE_RATE,1/12)-1; let pot=saved; const byMonth=[];
+    for(let t=0;t<n;t++){ const rem=n-t, safe= rem>=GLIDE? 0 : (GLIDE-rem)/GLIDE; pot=(pot+monthly)*(1+(1-safe)*g+safe*sgr); byMonth.push(pot); }
+    return {final:pot, byMonth};
+  }
+  function monthlyNeeded(n, yearly, saved, target){
+    const a=project(n,yearly,0,1).final, s0=project(n,yearly,saved,0).final;
+    return Math.max(0,(target-s0)/a);
+  }
+  const fundsWithHistory=()=>((etfs&&etfs.funds)||[]).filter(f=>f.m&&f.m.v&&f.m.v.length>24);
+
+  function renderKid(){
+    const el=document.getElementById('viewKid');
+    if(settings.tab==='addkid'){
+      el.innerHTML=`<div class="sect"><h2>Add a child</h2><span class="ln"></span></div>
+        <div class="kform">
+          <label>Name<input id="kName" maxlength="20" autocomplete="off"></label>
+          <label>Turns 18 in<input id="kWhen" type="month" min="${ymNow()}"></label>
+        </div>
+        <div style="padding:8px 18px"><button class="refresh" id="kAdd">Add planner tab</button></div>
+        <div class="ktext">Names and dates are saved in this browser only — they are not uploaded or stored in the app's code.</div>`;
+      el.querySelector('#kAdd').addEventListener('click',()=>{
+        const name=el.querySelector('#kName').value.trim(), at18=el.querySelector('#kWhen').value;
+        if(!name || !/^\d{4}-\d\d$/.test(at18) || ymDiff(ymNow(),at18)<12){ showBanner('err','Enter a name and the month they turn 18 (at least a year away).'); return; }
+        showBanner('','');
+        settings.kids.push({name, at18, target:20000, saved:0, fund:'', basis:'custom', rate:5});
+        showTab('kid:'+(settings.kids.length-1)); saveSet();
+      });
+      return;
+    }
+    const idx=+settings.tab.split(':')[1], k=settings.kids[idx]; if(!k) return;
+    const n=ymDiff(ymNow(), k.at18), yrs=n/12;
+    const funds=fundsWithHistory();
+    if(!funds.length){ el.innerHTML=`<div class="anhead" style="padding-top:14px">${etfState==='error'? 'Couldn\'t load the fund history — check your connection and open this tab again.' : 'Loading fund history…'}</div>`; return; }
+    if(n<12){ el.innerHTML=`<div class="anhead" style="padding-top:14px">${esc(k.name)} turns 18 in under a year — too close for a monthly investing plan.</div><button class="linkbtn danger" id="kDel">Remove this tab</button>`; bindDel(); return; }
+
+    const ranked=funds.map(f=>({f, bt:backtest(f,n)})).filter(x=>x.bt).sort((a,b)=>b.bt.typical-a.bt.typical);
+    const short=funds.length-ranked.length;
+    let cur=ranked.find(x=>x.f.key===k.fund);
+    if(!cur){ cur=['swda.uk','iwrd.uk','vwrl.uk','hmwo.uk'].map(key=>ranked.find(x=>x.f.key===key)).find(Boolean) || ranked.find(x=>x.f.cat==='Global') || ranked[0]; }   // default: a plain world tracker
+    if(!cur){ el.innerHTML=`<div class="anhead" style="padding-top:14px">None of the funds has enough history to test a ${yrs.toFixed(0)}-year plan.</div>`; return; }
+    const bt=cur.bt, custom=Math.max(-5,Math.min(20,+k.rate||0))/100;
+    if(!['custom','worst','typical'].includes(k.basis)) k.basis='custom';
+    const basisRate= k.basis==='typical'? bt.typical : k.basis==='worst'? bt.worst : custom;
+    const need=monthlyNeeded(n, basisRate, k.saved, k.target), pr=project(n, basisRate, k.saved, need);
+    const paid=k.saved+need*n, today=k.target/Math.pow(1+INFL,yrs);
+    const age0=18-Math.ceil(yrs);
+
+    // year-by-year schedule
+    let sched='';
+    for(let y=0; y*12<n; y++){
+      const end=Math.min(n,(y+1)*12), rem=n-end, ageTo=18-Math.round(rem/12), pot=pr.byMonth[end-1];
+      const safeEnd= rem>=GLIDE? 0 : (GLIDE-rem)/GLIDE;
+      const act= safeEnd===0? 'All of it in the fund' : safeEnd>=1? 'Everything in cash-like savings by the 18th birthday' : 'Have about '+Math.round(safeEnd*100)+'% in cash-like savings by this birthday';
+      sched+=`<div class="krow${safeEnd>0?' safe':''}"><div class="t"><b>To age ${ageTo}</b><span>${act}</span></div><div class="r mono">${gbp(need)}/mo</div><div class="r mono">${gbp(pot)}</div></div>`;
+    }
+    const scen=[['custom','Prudent','the rate you set above',custom],['worst','Worst in history','weakest '+yrs.toFixed(0)+'-year stretch',bt.worst],['typical','Typical in history','middle of all stretches',bt.typical],['best','Best in history','strongest stretch',bt.best]]
+      .map(([id,label,sub,r])=>`<div class="krow${k.basis===id?' sel':''}"><div class="t"><b>${label}</b><span>${sub}</span></div><div class="r mono">${pc(r)}/yr</div><div class="r mono">${gbp(monthlyNeeded(n,r,k.saved,k.target))}/mo</div></div>`).join('');
+    const showAll=el.dataset.all==='1', list=showAll? ranked : ranked.slice(0,8);
+    const rank=list.map(x=>`<div class="krow pick${x.f.key===cur.f.key?' sel':''}" data-fund="${esc(x.f.key)}"><div class="t"><b>${esc(x.f.sym)}</b> <span class="cat">${esc(x.f.cat)}</span><span>${esc(x.f.name||'')} · data from ${x.bt.from}</span></div><div class="r mono">${pc(x.bt.typical)}</div><div class="r mono">${pc(x.bt.worst)}</div></div>`).join('');
+    // the longest view the data allows: £100 a month over the last 18 years
+    const LONG_Y=17, long=funds.map(f=>{ const v=f.m.v, L=LONG_Y*12; if(v.length<L+1) return null; const i=v.length-1-L; let fv=0; for(let j=0;j<L;j++) fv+=v[i+L]/v[i+j]; return {f, fv:fv*100, r:rateFor(fv,L)}; })
+      .filter(Boolean).sort((a,b)=>b.fv-a.fv);
+    const longRows=long.map(x=>`<div class="krow"><div class="t"><b>${esc(x.f.sym)}</b> <span class="cat">${esc(x.f.cat)}</span><span>${esc(x.f.name||'')}</span></div><div class="r mono">${pc(x.r)}/yr</div><div class="r mono">${gbp(x.fv)}</div></div>`).join('');
+
+    el.innerHTML=`
+      <div class="hero">
+        <div class="hl">${esc(k.name)} · 18 in ${esc(ymLabel(k.at18))}</div>
+        <div class="hv mono">${gbp(need)} <small>a month</small></div>
+        <div class="hs">for <b>${yrs>=2? Math.floor(yrs)+' years'+(n%12? ' '+(n%12)+' months':'') : n+' months'}</b> to aim for <b>${gbp(k.target)}</b> in ${esc(cur.f.sym)}.
+          You would pay in ${gbp(paid)}; growth is assumed to add ${gbp(Math.max(0,k.target-paid))}.<br>
+          ${gbp(k.target)} then buys roughly what <b>${gbp(today)}</b> buys today.</div>
+      </div>
+      <div class="kform">
+        <label>Goal at 18 (£)<input id="kTarget" type="number" inputmode="numeric" min="0" step="500" value="${k.target}"></label>
+        <label>Saved so far (£)<input id="kSaved" type="number" inputmode="numeric" min="0" step="50" value="${k.saved}"></label>
+        <label class="wide">Fund<select id="kFund">${ranked.map(x=>`<option value="${esc(x.f.key)}"${x.f.key===cur.f.key?' selected':''}>${esc(x.f.sym)} — ${esc(x.f.name||'')}</option>`).join('')}</select></label>
+        <label>Plan for<select id="kBasis"><option value="custom">Prudent (my rate)</option><option value="worst">Worst in history</option><option value="typical">Typical in history</option></select></label>
+        <label>Turns 18 in<input id="kWhen" type="month" value="${esc(k.at18)}"></label>
+        ${k.basis==='custom'? `<label class="wide">Growth per year to plan on (%)<input id="kRate" type="number" inputmode="decimal" step="0.5" min="-5" max="20" value="${k.rate}"></label>`:''}
+      </div>
+
+      <div class="sect"><h2>What history says</h2><span class="ln"></span></div>
+      <div class="ktext">Paying in monthly for ${yrs.toFixed(0)} years, tested on all <b>${bt.count}</b> such stretches of ${esc(cur.f.sym)} that started between ${bt.from} and ${bt.to}. That whole era was unusually good for shares, so the plan defaults to a more prudent rate.</div>
+      <div class="ktable"><div class="krow h"><div>Outcome</div><div class="r">Growth</div><div class="r">Needed</div></div>${scen}</div>
+
+      <div class="sect"><h2>Year by year</h2><span class="ln"></span></div>
+      <div class="ktable"><div class="krow h"><div>Stage</div><div class="r">Pay in</div><div class="r">Pot on plan</div></div>${sched}</div>
+      <div class="ktext"><ol>
+        <li><b>Set up a monthly payment of ${gbp(need)}</b> into ${esc(cur.f.sym)}, ideally on payday so it happens without thinking.</li>
+        <li><b>Once a year</b>, type the pot's real value into "Saved so far". The monthly figure above recalculates: pay that amount for the next year.</li>
+        <li><b>Don't stop in a bad year.</b> Falls are when monthly payments buy the most.</li>
+        <li><b>From age 15</b>, move steadily out of the fund into cash-like savings (the amber rows), so a market fall just before 18 can't undo the plan.</li>
+      </ol></div>
+
+      <div class="sect"><h2>Funds over ${yrs.toFixed(0)} years</h2><span class="ln"></span></div>
+      <div class="ktext">Yearly growth from monthly investing over every ${yrs.toFixed(0)}-year stretch in each fund's history. Tap a fund to plan with it.${short? ' '+short+' newer fund'+(short===1?' is':'s are')+' left out for lack of history.':''}</div>
+      <div class="ktable"><div class="krow h"><div>Fund</div><div class="r">Typical</div><div class="r">Worst</div></div>${rank}</div>
+      ${ranked.length>8? `<button class="linkbtn" id="kAll">${showAll?'Show fewer':'Show all '+ranked.length+' funds'}</button>`:''}
+
+      ${long.length? `<div class="sect"><h2>Looking back ${LONG_Y} years</h2><span class="ln"></span></div>
+      <div class="ktext">What £100 a month (${gbp(LONG_Y*1200)} paid in) became over the last ${LONG_Y} years. Price records for these funds only start in 2008–09, so a full 18-year test isn't possible yet; ${long.length} fund${long.length===1?' has':'s have'} ${LONG_Y} years.</div>
+      <div class="ktable"><div class="krow h"><div>Fund</div><div class="r">Growth</div><div class="r">Worth now</div></div>${longRows}</div>` : ''}
+
+      <div class="ktext" style="padding-top:14px">This is arithmetic on past prices, not financial advice, and the past does not predict the future. Fund histories here mostly begin after the 2008 crash, a strong period for shares, so even the worst stretch on record may prove optimistic — which is why the plan starts from a prudent 5% a year. Figures include reinvested dividends and ignore fees and tax. The value of investments can fall as well as rise. In the UK a Junior ISA shelters a child's investments from tax, but the money becomes theirs at 18 — check the current rules and allowance.</div>
+      <button class="linkbtn danger" id="kDel">Remove ${esc(k.name)}'s tab</button>`;
+
+    el.querySelector('#kBasis').value=k.basis;
+    const num=(id,key,min)=>{ const i=el.querySelector(id); if(i) i.addEventListener('change',e=>{ const v=parseFloat(e.target.value); k[key]=isNaN(v)? min : Math.max(min,v); saveSet(); renderKid(); }); };
+    num('#kTarget','target',0); num('#kSaved','saved',0); num('#kRate','rate',-5);
+    el.querySelector('#kFund').addEventListener('change',e=>{ k.fund=e.target.value; saveSet(); renderKid(); });
+    el.querySelector('#kBasis').addEventListener('change',e=>{ k.basis=e.target.value; saveSet(); renderKid(); });
+    const w=el.querySelector('#kWhen'); if(w) w.addEventListener('change',e=>{ if(/^\d{4}-\d\d$/.test(e.target.value)){ k.at18=e.target.value; saveSet(); } renderKid(); });
+    el.querySelectorAll('[data-fund]').forEach(r=>r.addEventListener('click',()=>{ k.fund=r.dataset.fund; saveSet(); renderKid(); window.scrollTo({top:0, behavior:'smooth'}); }));
+    const all=el.querySelector('#kAll'); if(all) all.addEventListener('click',()=>{ el.dataset.all= showAll? '' : '1'; renderKid(); });
+    bindDel();
+    function bindDel(){ const d=el.querySelector('#kDel'); if(d) d.addEventListener('click',()=>{ if(!confirm('Remove '+k.name+'\'s planner tab?')) return; settings.kids.splice(idx,1); showTab('watch'); saveSet(); }); }
+  }
+  // one-tap setup link: index.html#kids=Name:YYYY-MM,Name:YYYY-MM  (kept out of the code so names stay private)
+  function importKidsFromLink(){
+    const m=/[#&]kids=([^&]+)/.exec(location.hash||''); if(!m) return false;
+    let added=-1;
+    decodeURIComponent(m[1]).split(',').forEach(part=>{ const [name,at18]=part.split(':').map(x=>(x||'').trim());
+      if(!name || !/^\d{4}-\d\d$/.test(at18) || settings.kids.some(k=>k.name.toLowerCase()===name.toLowerCase())) return;
+      settings.kids.push({name:name.slice(0,20), at18, target:20000, saved:0, fund:'', basis:'custom', rate:5}); if(added<0) added=settings.kids.length-1; });
+    try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){}
+    if(added>=0){ settings.tab='kid:'+added; saveSet(); }
+    return added>=0;
+  }
 
   /* ---------- init ---------- */
   (async function(){
     await loadAll();
     document.getElementById('sortSel').value=settings.sort;
     document.getElementById('holdBtn').classList.toggle('on',settings.holdings);
+    if(!Array.isArray(settings.kids)) settings.kids=[];
+    importKidsFromLink();
     render();
     showTab(settings.tab);
     refreshAll();

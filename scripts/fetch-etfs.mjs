@@ -1,5 +1,5 @@
-// ETF performance job: reads etfs.txt, fetches up to 10 years of daily dividend-adjusted prices per fund,
-// and writes the returns the Analysis tab ranks. Long history changes slowly, so this only refetches
+// ETF performance job: reads etfs.txt, fetches each fund's full daily price and dividend history, and writes
+// the returns the Analysis tab ranks plus a month-end total-return series for the children's planner tabs. Long history changes slowly, so this only refetches
 // when the list changes or the previous file is older than MAX_AGE_H hours.
 // usage: node scripts/fetch-etfs.mjs etfs.txt etfs.json [previous-etfs.json]
 import {readFileSync, writeFileSync, existsSync} from 'node:fs';
@@ -11,23 +11,26 @@ const list=readFileSync(listPath,'utf8').split(/\r?\n/).map(l=>l.replace(/#.*/,'
   const [t,cat]=l.split(',').map(x=>x.trim()); const key=t.toLowerCase();
   return {key:key.includes('.')? key : key+'.us', cat:cat||'Other'};
 });
-const sig='v2:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
+const sig='v5:'+list.map(e=>e.key+'|'+e.cat).join(',');   // bump the version when the calculation changes
 let prev=null; try{ if(prevPath && existsSync(prevPath)) prev=JSON.parse(readFileSync(prevPath,'utf8')); }catch(e){}
 if(prev && prev.sig===sig && Date.now()-Date.parse(prev.updated)<MAX_AGE_H*3600e3){
   writeFileSync(outPath, JSON.stringify(prev)); console.log('ETF data is fresh (', prev.updated, ') — reused'); process.exit(0);
 }
 
 const iso=d=>d.toISOString().slice(0,10);
-async function history(key){
-  const url='https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(yahooSym(key))+'?range=10y&interval=1d&events=div';
-  const r=await fetch(url,{headers:{'User-Agent':'pulse-price-job','Accept':'*/*'}, signal:AbortSignal.timeout(30000)});
+async function history(key, cat){
+  const url='https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(yahooSym(key))+'?period1=0&period2='+Math.floor(Date.now()/1000)+'&interval=1d&events=div';
+  const r=await fetch(url,{headers:{'User-Agent':'pulse-price-job','Accept':'*/*'}, signal:AbortSignal.timeout(60000)});
   if(!r.ok) throw new Error('HTTP '+r.status);
   const res=(await r.json()).chart.result[0], m=res.meta, ts=res.timestamp||[], off=(m.gmtoffset||0)*1000;
   const close=res.indicators.quote[0].close;
   let rows=[]; ts.forEach((t,i)=>{ if(close[i]!=null && close[i]>0) rows.push({t, d:iso(new Date(t*1000+off)), p:close[i]}); });
   if(rows.length<30) throw new Error('too little history');
-  // some London lines flip between pence and pounds in the source: undo x100 jumps
-  let k=1; for(let i=1;i<rows.length;i++){ const ratio=rows[i].p*k/rows[i-1].p; if(ratio>50) k/=100; else if(ratio<0.02) k*=100; rows[i].p*=k; }
+  // The source has stretches quoted in the wrong unit (pence vs pounds, or another currency's price). Share and bond
+  // funds never genuinely move 20% in a day, so treat any such jump as a unit change and carry the level across it.
+  // Precious metals can (silver fell over a quarter in one day in January 2026), so they get a wider limit.
+  const [up,down]= /gold|silver/i.test(cat||'')? [1.5,0.67] : [1.25,0.8];
+  let k=1; for(let i=1;i<rows.length;i++){ const raw=rows[i].p, ratio=raw*k/rows[i-1].p; if(ratio>up || ratio<down) k=rows[i-1].p/raw; rows[i].p=raw*k; rows[i].k=k; }
   // Total return with dividends reinvested on the ex-dividend day. Worked out here from the raw prices and
   // dividend records, because the source's own adjusted series under-counts dividends on pence-quoted funds.
   const divs=Object.values((res.events||{}).dividends||{}).sort((x,y)=>x.date-y.date); let di=0;
@@ -35,7 +38,7 @@ async function history(key){
   while(di<divs.length && divs[di].date<=rows[0].t) di++;
   for(let i=1;i<rows.length;i++){
     let paid=0;
-    while(di<divs.length && divs[di].date<=rows[i].t+86399){ let a=divs[di].amount||0; if(a/rows[i].p>0.2) a/=100; paid+=a; di++; }
+    while(di<divs.length && divs[di].date<=rows[i].t+86399){ let a=(divs[di].amount||0)*(rows[i].k||1); if(a/rows[i].p>0.2) a/=100; paid+=a; di++; }
     rows[i].c=rows[i-1].c*(rows[i].p+paid)/rows[i-1].p;
   }
   return {rows, name:m.longName||m.shortName||'', cur:(m.currency==='GBp'||m.currency==='GBX')?'GBP':(m.currency||'')};
@@ -56,13 +59,18 @@ function returns(rows){
     const ok= base && fin && base.d>=(yr-1)+'-12-20';
     if(yr===thisYear) r.ytd= ok? pct(fin.c, base.c) : null; else if(ok) y[yr]=pct(fin.c, base.c);
   }
-  return {r, y, since:first.d, asof:last.d};
+  // month-end total-return index (first month = 100), complete months only — used for monthly-investing backtests
+  const ends=[]; for(let i=0;i<rows.length;i++){ const ym=rows[i].d.slice(0,7); if(i+1<rows.length && rows[i+1].d.slice(0,7)===ym) continue; if(i+1<rows.length) ends.push({ym, c:rows[i].c}); }
+  const v=[]; let cur=ends.length? ends[0].ym : '';
+  for(const e of ends){ while(cur<e.ym){ v.push(v.length? v[v.length-1] : 100); let [Y,M]=cur.split('-').map(Number); M++; if(M>12){ M=1; Y++; } cur=Y+'-'+String(M).padStart(2,'0'); }
+    v.push(+(e.c/ends[0].c*100).toFixed(3)); let [Y,M]=cur.split('-').map(Number); M++; if(M>12){ M=1; Y++; } cur=Y+'-'+String(M).padStart(2,'0'); }
+  return {r, y, since:first.d, asof:last.d, m: ends.length>12? {s:ends[0].ym, v} : null};
 }
 
 const funds=[]; let ok=0;
 for(const e of list){
   try{
-    const h=await history(e.key);
+    const h=await history(e.key, e.cat);
     funds.push({key:e.key, sym:e.key.replace(/\.(uk|us)$/,'').toUpperCase(), cat:e.cat, name:h.name, cur:h.cur, ...returns(h.rows)});
     ok++; console.log('ok  ', e.key, h.rows.length, 'days', h.name);
   }catch(err){
