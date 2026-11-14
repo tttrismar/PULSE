@@ -109,6 +109,24 @@
     padding:8px 12px;cursor:pointer;text-decoration:none;}
   .pnote{color:var(--muted);font-size:12px;line-height:1.5;padding:2px 6px 0;}
 
+  /* tabs + analysis */
+  .tabs{display:flex;gap:6px;margin:4px 18px 6px;padding:4px;background:var(--bg2);border:1px solid var(--line);border-radius:14px;}
+  .tab{flex:1;font-family:inherit;font-size:14px;font-weight:700;color:var(--muted);background:transparent;border:none;border-radius:10px;padding:10px 8px;cursor:pointer;}
+  .tab.on{background:var(--panel2);color:var(--text);}
+  [hidden]{display:none !important;}
+  .erow{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:grid;
+    grid-template-columns:26px minmax(0,1fr) auto;gap:4px 10px;align-items:center;}
+  .erow .rk{color:var(--dim);font-size:13px;font-weight:700;text-align:center;}
+  .erow .es{font-weight:800;font-size:15.5px;letter-spacing:.3px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+  .erow .en{color:var(--muted);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .erow .er{font-size:16px;font-weight:700;text-align:right;white-space:nowrap;}
+  .erow .ebar{grid-column:2 / -1;height:5px;border-radius:3px;background:var(--bg2);overflow:hidden;}
+  .erow .ebar i{display:block;height:100%;border-radius:3px;}
+  .erow .ebar i.up{background:var(--up);} .erow .ebar i.down{background:var(--down);}
+  .cat{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;padding:3px 6px;border-radius:6px;background:rgba(76,154,255,.14);color:#a9ccff;}
+  .erow.nodata{opacity:.55;}
+  .anhead{color:var(--muted);font-size:12px;line-height:1.5;padding:2px 20px 8px;}
+
   .banner{margin:0 18px 8px;padding:11px 13px;border-radius:12px;font-size:12.5px;line-height:1.5;display:none;}
   .banner.show{display:block;}
   .banner.err{background:var(--down-bg);color:#ffb3bd;border:1px solid rgba(255,92,114,.3);}
@@ -131,6 +149,23 @@
     <div class="status" id="status">Not updated yet</div>
   </header>
 
+  <div class="tabs" role="tablist">
+    <button class="tab on" id="tabWatch" role="tab">Watchlist</button>
+    <button class="tab" id="tabAnalysis" role="tab">Analysis</button>
+  </div>
+
+  <div id="viewAnalysis" hidden>
+    <div class="toolbar">
+      <select id="anPeriod" title="Period"></select>
+      <select id="anCat" title="Category"></select>
+      <button class="chipbtn" id="anAnn" title="Show the average return per year instead of the total">Per year</button>
+    </div>
+    <div class="anhead" id="anHead"></div>
+    <div class="list" id="anList"></div>
+    <div class="pnote" style="padding:12px 20px 0">A hand-picked list of popular London-listed ETFs, not the whole market. Returns include reinvested dividends, are in each fund's trading currency and ignore fees and tax. Past performance does not predict future returns.</div>
+  </div>
+
+  <div id="viewWatch">
   <div class="toolbar">
     <button class="refresh" id="refreshBtn"><span class="spin"></span><span class="rtext">↻ Refresh</span></button>
     <select id="sortSel" title="Sort">
@@ -158,6 +193,7 @@
   <div class="sect"><h2>Pre-IPO Watch · private</h2><span class="ln"></span></div>
   <div class="list" id="private"></div>
   <div class="pnote">These are private companies with no public share price. Set a valuation you're tracking, and tap <b>News</b> for the latest.</div>
+  </div>
 
   <footer>
     Freetrade imports are read in your browser only — the file is never uploaded anywhere.<br>
@@ -177,7 +213,7 @@
 
   let watch=[];      // [{sym, shares, cost}]
   let priv=[];       // [{name, val, asof, q}]
-  let settings={sort:'movers', holdings:false, edit:false};
+  let settings={sort:'movers', holdings:false, edit:false, tab:'watch', anPeriod:'5y', anCat:'', anAnn:false};
   let quotes={};     // sym -> {price, prev, chg, pct, name, spark:[], asof}
 
   const DEFAULT_WATCH=[
@@ -493,12 +529,86 @@
     const f=e.target.files[0]; e.target.value=''; if(f) await importFreetrade(f);
   });
 
+  /* ---------- analysis: ETF performance ranking ---------- */
+  const ETF_URL='https://raw.githubusercontent.com/tttrismar/PULSE/data/etfs.json', EKEY='pulse_etfs';
+  const PERIODS=[['ytd','This year so far',0],['1y','Last 1 year',1],['3y','Last 3 years',3],['5y','Last 5 years',5],['10y','Last 10 years',10]];
+  let etfs=null, etfState='idle';
+  async function loadEtfs(){
+    if(etfState==='loading') return;
+    if(!etfs){ try{ const r=await store.get(EKEY); if(r) etfs=JSON.parse(r); }catch(e){} }
+    if(etfs && etfs.at && Date.now()-etfs.at<3600e3){ renderAnalysis(); return; }   // checked within the hour
+    etfState='loading'; renderAnalysis();
+    try{ const d=await getJSON(ETF_URL+'?t='+Math.floor(Date.now()/3600e3), 15000);
+      if(d && d.funds){ etfs={at:Date.now(), updated:d.updated, funds:d.funds}; store.set(EKEY, JSON.stringify(etfs)); }
+      etfState='idle';
+    }catch(e){ etfState='error'; }
+    renderAnalysis();
+  }
+  function etfReturn(f, period){
+    if(/^\d{4}$/.test(period)) return f.y && f.y[period]!=null? f.y[period] : null;
+    const v=f.r? f.r[period] : null; if(v==null) return null;
+    const yrs=(PERIODS.find(p=>p[0]===period)||[])[2]||0;
+    return settings.anAnn && yrs>1? (Math.pow(1+v/100, 1/yrs)-1)*100 : v;
+  }
+  function renderAnalysis(){
+    const head=document.getElementById('anHead'), list=document.getElementById('anList'), pSel=document.getElementById('anPeriod'), cSel=document.getElementById('anCat');
+    const funds=(etfs&&etfs.funds)||[];
+    if(!funds.length){
+      list.innerHTML='';
+      head.textContent= etfState==='error'? 'Couldn\'t load the ETF data — check your connection and open this tab again.' : 'Loading ETF performance…';
+      return;
+    }
+    const years=[...new Set(funds.flatMap(f=>Object.keys(f.y||{})))].sort().reverse();
+    const cats=[...new Set(funds.map(f=>f.cat))];
+    if(![...PERIODS.map(p=>p[0]),...years].includes(settings.anPeriod)) settings.anPeriod='5y';
+    if(settings.anCat && !cats.includes(settings.anCat)) settings.anCat='';
+    pSel.innerHTML=PERIODS.map(p=>`<option value="${p[0]}">${p[1]}</option>`).join('')+'<optgroup label="Calendar year">'+years.map(y=>`<option value="${y}">${y}</option>`).join('')+'</optgroup>';
+    pSel.value=settings.anPeriod;
+    cSel.innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    cSel.value=settings.anCat;
+    const yrs=(PERIODS.find(p=>p[0]===settings.anPeriod)||[])[2]||0, annBtn=document.getElementById('anAnn');
+    annBtn.hidden=!(yrs>1); annBtn.classList.toggle('on', settings.anAnn);
+
+    const rows=funds.filter(f=>!settings.anCat || f.cat===settings.anCat).map(f=>({f, v:etfReturn(f, settings.anPeriod)}));
+    const have=rows.filter(x=>x.v!=null).sort((a,b)=>b.v-a.v), none=rows.filter(x=>x.v==null);
+    const max=Math.max(1, ...have.map(x=>Math.abs(x.v)));
+    const asof=funds.map(f=>f.asof||'').sort().pop();
+    head.textContent=have.length+' fund'+(have.length===1?'':'s')+' ranked by '+(settings.anAnn&&yrs>1?'average return per year':'total return')
+      +(asof? ' · prices to '+new Date(asof+'T00:00:00').toLocaleDateString([], {day:'numeric',month:'short',year:'numeric'}) : '')
+      +(none.length? ' · '+none.length+' not old enough for this period' : '');
+    list.innerHTML=have.map((x,i)=>{ const dir=x.v>=0?'up':'down';
+      return `<div class="erow">
+        <div class="rk">${i+1}</div>
+        <div><div class="es">${esc(x.f.sym)} <span class="cat">${esc(x.f.cat)}</span></div><div class="en">${esc(x.f.name||'')}${x.f.cur?' · '+esc(x.f.cur):''}</div></div>
+        <div class="er mono ${dir}">${(x.v>=0?'+':'')+x.v.toFixed(1)}%</div>
+        <div class="ebar"><i class="${dir}" style="width:${(Math.abs(x.v)/max*100).toFixed(1)}%"></i></div>
+      </div>`; }).join('')
+      + none.map(x=>`<div class="erow nodata">
+        <div class="rk">–</div>
+        <div><div class="es">${esc(x.f.sym)} <span class="cat">${esc(x.f.cat)}</span></div><div class="en">${esc(x.f.name||'')}</div></div>
+        <div class="er mono na">since ${esc((x.f.since||'').slice(0,4))}</div>
+      </div>`).join('');
+  }
+  function showTab(tab){
+    settings.tab= tab==='analysis'? 'analysis' : 'watch';
+    const an=settings.tab==='analysis';
+    document.getElementById('viewAnalysis').hidden=!an; document.getElementById('viewWatch').hidden=an;
+    document.getElementById('tabAnalysis').classList.toggle('on',an); document.getElementById('tabWatch').classList.toggle('on',!an);
+    if(an) loadEtfs();
+  }
+  document.getElementById('tabWatch').addEventListener('click',()=>{ showTab('watch'); saveSet(); });
+  document.getElementById('tabAnalysis').addEventListener('click',()=>{ showTab('analysis'); saveSet(); });
+  document.getElementById('anPeriod').addEventListener('change',e=>{ settings.anPeriod=e.target.value; saveSet(); renderAnalysis(); });
+  document.getElementById('anCat').addEventListener('change',e=>{ settings.anCat=e.target.value; saveSet(); renderAnalysis(); });
+  document.getElementById('anAnn').addEventListener('click',()=>{ settings.anAnn=!settings.anAnn; saveSet(); renderAnalysis(); });
+
   /* ---------- init ---------- */
   (async function(){
     await loadAll();
     document.getElementById('sortSel').value=settings.sort;
     document.getElementById('holdBtn').classList.toggle('on',settings.holdings);
     render();
+    showTab(settings.tab);
     refreshAll();
     const AUTO_MS=120000;
     const auto=()=>{
